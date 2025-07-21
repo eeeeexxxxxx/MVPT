@@ -1,27 +1,55 @@
-from solana.rpc.api import Client
+from solana.rpc.async_api import AsyncClient
 from solana.keypair import Keypair
-from solana.transaction import Transaction
 from solana.publickey import PublicKey
+from anchorpy import Program, Provider, Wallet
+import asyncio
 import base58
+import json
 
-class FlashLoanExecutor:
-    def __init__(self, config):
-        self.config = config
-        self.client = Client(config.solana_rpc)
-        # Приватный ключ: либо base58 строка, либо список чисел
-        if isinstance(config.wallet_private_key, str):
-            secret = base58.b58decode(config.wallet_private_key)
-            self.keypair = Keypair.from_secret_key(secret)
-        else:
-            self.keypair = Keypair.from_secret_key(bytes(config.wallet_private_key))
+ARBITRAGE_IDL_PATH = "../arbitrage_program/target/idl/arbitrage_program.json"
+ARBITRAGE_PROGRAM_ID = "33BQPv9UU9moaQPah9umUad4ovijbF2TVmxcGdSmeSJR"  # заменить на актуальный
 
-    def execute_flashloan_arbitrage(self, amount, buy_dex, sell_dex, buy_price, sell_price, pair):
-        # TODO: Сформировать и отправить транзакцию с вызовом Anchor-программы
-        # Здесь будет взаимодействие с on-chain программой (CPI: MarginFi + DEX)
-        print(f"[EXECUTOR] Would execute flashloan: {amount} {pair} via {buy_dex} -> {sell_dex}")
-        # Пример: формируем пустую транзакцию (заглушка)
-        tx = Transaction()
-        # ... добавить инструкции ...
-        # resp = self.client.send_transaction(tx, self.keypair)
-        # print(f"[EXECUTOR] TX sent: {resp}")
-        return True 
+async def execute_arbitrage_anchorpy(config, params, accounts):
+    # Загрузка IDL
+    with open(ARBITRAGE_IDL_PATH, "r") as f:
+        idl = json.load(f)
+    program_id = PublicKey(ARBITRAGE_PROGRAM_ID)
+    client = AsyncClient(config.solana_rpc)
+    wallet = Wallet(Keypair.from_secret_key(base58.b58decode(config.wallet_private_key)))
+    provider = Provider(client, wallet)
+    program = Program(idl, program_id, provider)
+    # Вызов инструкции
+    tx = await program.rpc["execute_arbitrage"](
+        params,
+        ctx={
+            "accounts": accounts,
+            "signers": [wallet.payer],
+        }
+    )
+    print(f"[ANCHORPY] TX sent: {tx}")
+    await client.close()
+
+# Пример использования:
+# params = {
+#     "amount": 1000000,
+#     "min_profit": 1000,
+#     "buy_pool": "...",
+#     "sell_pool": "...",
+#     "token_mint": "..."
+# }
+# accounts = {
+#     "user": "...",
+#     "marginfi_group": "...",
+#     "marginfi_account": "...",
+#     "marginfi_bank": "...",
+#     "buy_pool": "...",
+#     "sell_pool": "...",
+#     "user_token_account": "...",
+#     "temp_token_account": "...",
+#     "marginfi_program": "...",
+#     "token_program": "...",
+#     "system_program": "...",
+#     "rent": "...",
+#     "associated_token_program": "..."
+# }
+# asyncio.run(execute_arbitrage_anchorpy(config, params, accounts)) 
