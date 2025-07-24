@@ -65,7 +65,7 @@ class DexClients:
         return None
 
     def fetch_all_prices(self):
-        # Получаем реальные цены с DEX
+        
         prices = {}
         orca_price = self.fetch_orca_price()
         if orca_price:
