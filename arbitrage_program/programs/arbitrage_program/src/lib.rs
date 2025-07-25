@@ -3,7 +3,7 @@ use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::compute_budget::ComputeBudgetInstruction;
 
-// TODO: заменить на реальный id после деплоя
+// свой ID
 declare_id!("33BQPv9UU9moaQPah9umUad4ovijbF2TVmxcGdSmeSJR");
 
 // MarginFi program id (mainnet)
