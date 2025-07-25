@@ -1,84 +1,87 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::compute_budget::ComputeBudgetInstruction;
 
 // TODO: заменить на реальный id после деплоя
 declare_id!("33BQPv9UU9moaQPah9umUad4ovijbF2TVmxcGdSmeSJR");
 
 // MarginFi program id (mainnet)
 pub const MARGINFI_PROGRAM_ID: &str = "4Mtd6QeQ8e6hw2yffA9H9n1tFoZT3zh7TBTtJU1vE4hN";
+// Jupiter program id (mainnet)
+pub const JUPITER_PROGRAM_ID: &str = "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB";
 
 #[program]
 pub mod arbitrage_program {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        msg!("Greetings from: {:?}", ctx.program_id);
+    pub fn initialize(ctx: Context<Initialize>, min_profit: u64, slippage_bps: u16) -> Result<()> {
+        let settings = &mut ctx.accounts.settings;
+        settings.min_profit = min_profit;
+        settings.slippage_bps = slippage_bps;
+        msg!("[INIT] min_profit={} slippage_bps={}", min_profit, slippage_bps);
         Ok(())
     }
 
+    #[access_control(ctx.accounts.validate())]
     pub fn execute_arbitrage(
         ctx: Context<ExecuteArbitrage>,
         params: ArbitrageParams,
     ) -> Result<()> {
-        require!(params.amount > 0, CustomError::InvalidAmount);
-        require!(params.min_profit > 0, CustomError::InvalidProfit);
-        // 2. Вызвать MarginFi Flash Loan (CPI, mock дискриминатор)
-        msg!("[CPI] MarginFi Flash Loan: amount={} token_mint={}", params.amount, params.token_mint);
-        let marginfi_program = ctx.accounts.marginfi_program.key();
-        let accounts = vec![
-            AccountMeta::new(*ctx.accounts.marginfi_group.key, false),
-            AccountMeta::new(*ctx.accounts.marginfi_account.key, false),
-            AccountMeta::new(*ctx.accounts.marginfi_bank.key, false),
-            AccountMeta::new(*ctx.accounts.user_token_account.key, false),
-            AccountMeta::new(*ctx.accounts.temp_token_account.key, false),
-            AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
-            AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
-        ];
-        // MOCK: дискриминатор flash_loan (8 байт, заменить на реальный из IDL MarginFi)
-        let flash_loan_ix_discriminator: [u8; 8] = [0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef];
-        let mut data = vec![];
-        data.extend_from_slice(&flash_loan_ix_discriminator);
-        data.extend_from_slice(&params.amount.to_le_bytes());
-        // receiverData (можно пустой для MVP)
-        data.extend_from_slice(&(0u64).to_le_bytes());
-        let ix = Instruction {
-            program_id: marginfi_program,
-            accounts,
-            data,
-        };
-        let _ = invoke_signed(
-            &ix,
-            &[
-                ctx.accounts.marginfi_group.to_account_info(),
-                ctx.accounts.marginfi_account.to_account_info(),
-                ctx.accounts.marginfi_bank.to_account_info(),
-                ctx.accounts.user_token_account.to_account_info(),
-                ctx.accounts.temp_token_account.to_account_info(),
-                ctx.accounts.token_program.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-            &[],
-        );
-        // 3. Выполнить swap на DEX (CPI, mock)
-        msg!("[CPI] DEX Swap: buy_pool={} sell_pool={}", params.buy_pool, params.sell_pool);
-        // TODO: Здесь будет invoke CPI в DEX (Orca/Raydium)
-        // 4. Вернуть Flash Loan (MarginFi)
+        // 1. Set compute unit limit/price
+        let cu_limit_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+        let cu_price_ix = ComputeBudgetInstruction::set_compute_unit_price(1_000);
+        invoke(&cu_limit_ix, &[])?;
+        invoke(&cu_price_ix, &[])?;
+
+        // 2. Проверка min_profit
+        let settings = &ctx.accounts.settings;
+        require!(params.min_profit >= settings.min_profit, CustomError::ProfitTooLow);
+        msg!("[ARBITRAGE] min_profit={} slippage={}bps", params.min_profit, settings.slippage_bps);
+
+        // 3. MarginFi Flash Loan (CPI, mock)
+        msg!("[CPI] MarginFi Borrow: amount={} token_mint={}", params.amount, params.token_mint);
+        // TODO: invoke CPI makeBorrowIx (MarginFi)
+        // require!(... ликвидность ...)
+
+        // 4. Swap A->B через Jupiter (CPI, mock)
+        msg!("[CPI] Jupiter Swap 1: {} -> {}", params.token_mint, params.intermediate_mint);
+        // TODO: invoke CPI swap (Jupiter)
+        // require!(... output > 0 ...)
+
+        // 5. Swap B->A через Jupiter (CPI, mock)
+        msg!("[CPI] Jupiter Swap 2: {} -> {}", params.intermediate_mint, params.token_mint);
+        // TODO: invoke CPI swap (Jupiter)
+        // require!(... output > 0 ...)
+
+        // 6. MarginFi Repay (CPI, mock)
         msg!("[CPI] MarginFi Repay");
-        // TODO: Здесь будет возврат Flash Loan (обычно автоматом, если средства возвращены)
-        // 5. Проверить профит (mock)
-        msg!("[CHECK] Profit >= min_profit: {}", params.min_profit);
+        // TODO: invoke CPI makeRepayIx (MarginFi)
+        // require!(... средств достаточно ...)
+
+        // 7. Логирование прибыли и комиссий (mock)
+        msg!("[LOG] Borrowed: {}", params.amount);
+        msg!("[LOG] Profit: {}", params.min_profit);
+        msg!("[LOG] Fees: ...");
         Ok(())
     }
 }
 
 #[derive(Accounts)]
-pub struct Initialize {}
+pub struct Initialize<'info> {
+    #[account(init, payer = payer, space = 8 + Settings::LEN, seeds = [b"settings"], bump)]
+    pub settings: Account<'info, Settings>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
 
 #[derive(Accounts)]
 pub struct ExecuteArbitrage<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
+    #[account(mut, seeds = [b"settings"], bump)]
+    pub settings: Account<'info, Settings>,
     /// CHECK: MarginFi group
     #[account(mut)]
     pub marginfi_group: UncheckedAccount<'info>,
@@ -88,12 +91,12 @@ pub struct ExecuteArbitrage<'info> {
     /// CHECK: MarginFi bank
     #[account(mut)]
     pub marginfi_bank: UncheckedAccount<'info>,
-    /// CHECK: DEX buy pool
+    /// CHECK: DEX pool 1
     #[account(mut)]
-    pub buy_pool: UncheckedAccount<'info>,
-    /// CHECK: DEX sell pool
+    pub pool1: UncheckedAccount<'info>,
+    /// CHECK: DEX pool 2
     #[account(mut)]
-    pub sell_pool: UncheckedAccount<'info>,
+    pub pool2: UncheckedAccount<'info>,
     /// CHECK: user's token account
     #[account(mut)]
     pub user_token_account: UncheckedAccount<'info>,
@@ -102,26 +105,50 @@ pub struct ExecuteArbitrage<'info> {
     pub temp_token_account: UncheckedAccount<'info>,
     /// CHECK: MarginFi program
     pub marginfi_program: UncheckedAccount<'info>,
+    /// CHECK: Jupiter program
+    pub jupiter_program: UncheckedAccount<'info>,
     pub token_program: Program<'info, anchor_spl::token::Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
     pub associated_token_program: Program<'info, anchor_spl::associated_token::AssociatedToken>,
 }
 
+impl<'info> ExecuteArbitrage<'info> {
+    pub fn validate(&self) -> Result<()> {
+        // Можно добавить дополнительные проверки аккаунтов
+        Ok(())
+    }
+}
+
+#[account]
+pub struct Settings {
+    pub min_profit: u64,
+    pub slippage_bps: u16,
+    // можно добавить адреса DEX, лимиты и др.
+}
+impl Settings {
+    pub const LEN: usize = 8 + 2;
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct ArbitrageParams {
     pub amount: u64,         // сумма Flash Loan (например, в лямпортах)
     pub min_profit: u64,     // минимальный профит (для защиты)
-    pub buy_pool: Pubkey,    // адрес пула для покупки (DEX)
-    pub sell_pool: Pubkey,   // адрес пула для продажи (DEX)
     pub token_mint: Pubkey,  // mint токена (например, SOL/USDC)
+    pub intermediate_mint: Pubkey, // промежуточный токен (например, SOL)
     // можно добавить путь swap-ов, адреса других аккаунтов и т.д.
 }
 
 #[error_code]
 pub enum CustomError {
-    #[msg("Invalid amount")] 
-    InvalidAmount,
-    #[msg("Invalid min profit")] 
-    InvalidProfit,
+    #[msg("Доходность ниже минимальной")] 
+    ProfitTooLow,
+    #[msg("Ошибка Flash Loan")] 
+    FlashLoanError,
+    #[msg("Ошибка свопа")] 
+    SwapError,
+    #[msg("Ошибка возврата займа")] 
+    RepayError,
+    #[msg("Ошибка CPI")] 
+    CPIError,
 }

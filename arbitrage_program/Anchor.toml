@@ -5,15 +5,17 @@ package_manager = "yarn"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
+[programs.devnet]
 arbitrage_program = "33BQPv9UU9moaQPah9umUad4ovijbF2TVmxcGdSmeSJR"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
+timeout = 120
+
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "mocha -t 1000000 tests/"
